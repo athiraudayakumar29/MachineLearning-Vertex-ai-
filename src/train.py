@@ -1,62 +1,108 @@
 """
-Unit tests for train.py: train_model and save_model, using a small
-synthetic dataset. Also keeps the original import-sanity check.
+train.py
+Trains a Logistic Regression classifier on the wine quality data
+and saves the fitted model to disk (or GCS, once MODEL_PATH is a gs:// URI).
+
+CLI usage:
+    python train.py
+    python train.py --max-iter 2000 --data-path ../data/winequality.csv
+    python train.py --model-path model_v2.joblib --random-state 7
 """
 
-import sys
-from pathlib import Path
+import argparse
+import json
+import logging
+from datetime import datetime, timezone
 
-import numpy as np
-import pandas as pd
-import pytest
+import joblib
+from sklearn.linear_model import LogisticRegression
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from config import CONFIG
+from preprocessing import run_preprocessing
 
-import config  # noqa: E402
-from train import train_model, save_model  # noqa: E402
+logger = logging.getLogger(__name__)
 
-
-def test_imports():
-    import preprocessing  # noqa: F401
-    import evaluate  # noqa: F401
-
-    assert config.CONFIG.MAX_ITER == 1000
-    assert config.CONFIG.TARGET_COL == "quality"
+RUNS_LOG_PATH = "runs.jsonl"
 
 
-@pytest.fixture
-def synthetic_train_data():
-    rng = np.random.default_rng(1)
-    n = 100
-    X_train = pd.DataFrame(
-        {
-            "alcohol": rng.random(n) * 15,
-            "acidity": rng.random(n) * 10,
-        }
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train the wine-quality classifier.")
+    parser.add_argument(
+        "--data-path", default=CONFIG.DATA_PATH,
+        help="Path to the training CSV (default: %(default)s)",
     )
-    y_train = (X_train["alcohol"] > 7.5).astype(int)
-    return X_train, y_train
+    parser.add_argument(
+        "--model-path", default=CONFIG.MODEL_PATH,
+        help="Where to save the trained model (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--max-iter", type=int, default=CONFIG.MAX_ITER,
+        help="Max iterations for LogisticRegression solver (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--random-state", type=int, default=CONFIG.RANDOM_STATE,
+        help="Random seed for reproducibility (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--test-size", type=float, default=CONFIG.TEST_SIZE,
+        help="Fraction of data held out for testing (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--runs-log", default=RUNS_LOG_PATH,
+        help="Where to append this run's params (default: %(default)s)",
+    )
+    return parser.parse_args()
 
 
-def test_train_model_returns_fitted_classifier(synthetic_train_data):
-    X_train, y_train = synthetic_train_data
-    model = train_model(X_train, y_train, max_iter=200, random_state=42)
-    # A fitted LogisticRegression exposes these attributes
-    assert hasattr(model, "coef_")
-    preds = model.predict(X_train)
-    assert len(preds) == len(y_train)
+def train_model(X_train, y_train, max_iter: int = CONFIG.MAX_ITER, random_state: int = CONFIG.RANDOM_STATE):
+    """Fit a LogisticRegression classifier."""
+    classifier = LogisticRegression(max_iter=max_iter, random_state=random_state)
+    classifier.fit(X_train, y_train)
+    return classifier
 
 
-def test_train_model_is_reproducible_with_same_seed(synthetic_train_data):
-    X_train, y_train = synthetic_train_data
-    model_a = train_model(X_train, y_train, max_iter=200, random_state=42)
-    model_b = train_model(X_train, y_train, max_iter=200, random_state=42)
-    assert np.allclose(model_a.coef_, model_b.coef_)
+def save_model(model, path: str = CONFIG.MODEL_PATH):
+    joblib.dump(model, path)
+    logger.info("Model saved to %s", path)
 
 
-def test_save_model_writes_file(tmp_path, synthetic_train_data):
-    X_train, y_train = synthetic_train_data
-    model = train_model(X_train, y_train, max_iter=200, random_state=42)
-    out_path = tmp_path / "model.joblib"
-    save_model(model, path=str(out_path))
-    assert out_path.exists()
+def log_run(params: dict, log_path: str = RUNS_LOG_PATH):
+    """Append this run's params to a local JSONL file for basic reproducibility
+    tracking. This is a lightweight stand-in for Vertex AI Experiments, wired
+    up properly once the pipeline moves to GCP.
+    """
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **params,
+    }
+    with open(log_path, "a") as f:
+        f.write(json.dumps(record) + "\n")
+    logger.info("Run logged to %s", log_path)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=CONFIG.LOG_LEVEL)
+    args = parse_args()
+
+    X_train, X_test, y_train, y_test = run_preprocessing(
+        path=args.data_path, test_size=args.test_size, random_state=args.random_state
+    )
+
+    classifier = train_model(
+        X_train, y_train, max_iter=args.max_iter, random_state=args.random_state
+    )
+    save_model(classifier, path=args.model_path)
+
+    log_run(
+        {
+            "data_path": args.data_path,
+            "model_path": args.model_path,
+            "max_iter": args.max_iter,
+            "random_state": args.random_state,
+            "test_size": args.test_size,
+            "n_features": X_train.shape[1],
+            "n_train_rows": len(X_train),
+            "n_test_rows": len(X_test),
+        },
+        log_path=args.runs_log,
+    )
