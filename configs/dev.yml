@@ -1,0 +1,15 @@
+# Dev/local environment config
+# (Loaded by config.py via env vars — export these before running,
+#  or source them in your shell / docker --env-file)
+
+DATA_PATH: "data/winequality.csv"
+MODEL_PATH: "model.joblib"
+MAX_ITER: 1000
+RANDOM_STATE: 42
+TEST_SIZE: 0.2
+MIN_ACCURACY: 0.70
+MIN_F1: 0.65
+
+GCP_PROJECT_ID: ""
+GCP_REGION: "us-central1"
+GCS_BUCKET: ""
