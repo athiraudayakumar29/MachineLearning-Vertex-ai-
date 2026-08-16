@@ -1,39 +1,62 @@
 """
-train.py
-Trains a Logistic Regression classifier on the wine quality data
-and saves the fitted model to disk (or GCS, once MODEL_PATH is a gs:// URI
-— wired up on Day 4 when the container/Vertex job is built).
+Unit tests for train.py: train_model and save_model, using a small
+synthetic dataset. Also keeps the original import-sanity check.
 """
 
-import logging
+import sys
+from pathlib import Path
 
-import joblib
-from sklearn.linear_model import LogisticRegression
+import numpy as np
+import pandas as pd
+import pytest
 
-from config import CONFIG
-from preprocessing import run_preprocessing
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-logger = logging.getLogger(__name__)
+import config  # noqa: E402
+from train import train_model, save_model  # noqa: E402
 
 
-def train_model(X_train, y_train, max_iter: int = CONFIG.MAX_ITER):
-    """Fit a LogisticRegression classifier."""
-    classifier = LogisticRegression(
-        max_iter=max_iter, random_state=CONFIG.RANDOM_STATE
+def test_imports():
+    import preprocessing  # noqa: F401
+    import evaluate  # noqa: F401
+
+    assert config.CONFIG.MAX_ITER == 1000
+    assert config.CONFIG.TARGET_COL == "quality"
+
+
+@pytest.fixture
+def synthetic_train_data():
+    rng = np.random.default_rng(1)
+    n = 100
+    X_train = pd.DataFrame(
+        {
+            "alcohol": rng.random(n) * 15,
+            "acidity": rng.random(n) * 10,
+        }
     )
-    classifier.fit(X_train, y_train)
-    return classifier
+    y_train = (X_train["alcohol"] > 7.5).astype(int)
+    return X_train, y_train
 
 
-def save_model(model, path: str = CONFIG.MODEL_PATH):
-    joblib.dump(model, path)
-    logger.info("Model saved to %s", path)
+def test_train_model_returns_fitted_classifier(synthetic_train_data):
+    X_train, y_train = synthetic_train_data
+    model = train_model(X_train, y_train, max_iter=200, random_state=42)
+    # A fitted LogisticRegression exposes these attributes
+    assert hasattr(model, "coef_")
+    preds = model.predict(X_train)
+    assert len(preds) == len(y_train)
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=CONFIG.LOG_LEVEL)
+def test_train_model_is_reproducible_with_same_seed(synthetic_train_data):
+    X_train, y_train = synthetic_train_data
+    model_a = train_model(X_train, y_train, max_iter=200, random_state=42)
+    model_b = train_model(X_train, y_train, max_iter=200, random_state=42)
+    assert np.allclose(model_a.coef_, model_b.coef_)
 
-    X_train, X_test, y_train, y_test = run_preprocessing()
 
-    classifier = train_model(X_train, y_train)
-    save_model(classifier)
+def test_save_model_writes_file(tmp_path, synthetic_train_data):
+    X_train, y_train = synthetic_train_data
+    model = train_model(X_train, y_train, max_iter=200, random_state=42)
+    out_path = tmp_path / "model.joblib"
+    save_model(model, path=str(out_path))
+    assert out_path.exists()

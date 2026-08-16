@@ -68,7 +68,11 @@ def split_data(
     return X_train, X_test, y_train, y_test
 
 
-def run_preprocessing(path: str = CONFIG.DATA_PATH):
+def run_preprocessing(
+    path: str = CONFIG.DATA_PATH,
+    test_size: float = CONFIG.TEST_SIZE,
+    random_state: int = CONFIG.RANDOM_STATE,
+):
     """Convenience function: load -> preprocess -> split -> scale."""
     data = load_data(path)
 
@@ -76,7 +80,7 @@ def run_preprocessing(path: str = CONFIG.DATA_PATH):
     assert data.isna().sum().sum() == 0, "Unexpected missing values in dataset"
 
     X, y = preprocess(data)
-    X_train, X_test, y_train, y_test = split_data(X, y)
+    X_train, X_test, y_train, y_test = split_data(X, y, test_size=test_size, random_state=random_state)
 
     # Scale features (fit on train only, to avoid leaking test info into train)
     scaler = StandardScaler()
